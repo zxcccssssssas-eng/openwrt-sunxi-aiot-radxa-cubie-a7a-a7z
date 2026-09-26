@@ -2,6 +2,8 @@
 #
 # Copyright (C) 2013-2016 OpenWrt.org
 
+# Optional A733 packages. Do not add these to DEVICE_PACKAGES.
+# Default firmware: not installed. CI builds NPU/overclock as extra .ipk (=m).
 ALLWINNER_A733_MENU:=Allwinner A733 extras
 
 define KernelPackage/rtc-sunxi
@@ -108,10 +110,11 @@ define KernelPackage/aw-nna-galcore
 endef
 
 define KernelPackage/aw-nna-galcore/description
-  In-tree Vivante galcore driver for the A733 NPU (VIP9000).
-  Creates /dev/galcore. Kernel ABI is 6.4.18.6.904649 and must match
-  userspace exactly; public TIM-VX builds are often 6.4.15.x and will
-  not work. Vendor userspace is glibc; musl images will not run it.
+  Extra software (not in the default image). In-tree Vivante galcore
+  driver for the A733 NPU (VIP9000). Creates /dev/galcore. Kernel ABI
+  is 6.4.18.6.904649 and must match userspace exactly; public TIM-VX
+  builds are often 6.4.15.x and will not work. Vendor userspace is
+  glibc; musl images will not run it.
   Mutually exclusive with kmod-aw-nna-vip.
 endef
 
@@ -131,9 +134,10 @@ define KernelPackage/aw-nna-vip
 endef
 
 define KernelPackage/aw-nna-vip/description
-  In-tree VIPLite 2.0.3 driver for the A733 NPU. Creates /dev/vipcore.
-  Preferred OpenWrt inference stack versus galcore. Userspace must match
-  VIPLite 2.0.3; vendor libs are glibc.
+  Extra software (not in the default image). In-tree VIPLite 2.0.3
+  driver for the A733 NPU. Creates /dev/vipcore. Preferred OpenWrt
+  inference stack versus galcore. Userspace must match VIPLite 2.0.3;
+  vendor libs are glibc.
   Mutually exclusive with kmod-aw-nna-galcore (same DT node).
 endef
 
@@ -150,7 +154,8 @@ define KernelPackage/drm-powervr
 endef
 
 define KernelPackage/drm-powervr/description
-  Backport of upstream drm/imagination (Linux 6.18+) to this 6.6 tree.
+  Extra software (not in the default image). Backport of upstream
+  drm/imagination (Linux 6.18+) to this 6.6 tree.
   Binds the A733 BXM-4-64 GPU (compatible img,img-rogue) and creates a
   render node. Needs firmware powervr/rogue_36.56.104.183_v1.fw.
   A733 BVNC 36.56.104.183 is experimental; exp_hw_support=1 is set.

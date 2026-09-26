@@ -21,7 +21,8 @@ define KernelPackage/sunxi-overclock
 endef
 
 define KernelPackage/sunxi-overclock/description
-  Optional helper that raises GPU/NPU clocks via clk + OPP, never raw MMIO.
+  Extra software (not in the default image). Optional helper that
+  raises GPU/NPU clocks via clk + OPP, never raw MMIO.
   Default-off: not autoloaded. Enable with /etc/config/overclock and
   /etc/init.d/sunxi-overclock. Hard-capped at datasheet/DT maxima
   (NPU 1120 MHz, GPU 1008 MHz) unless rebuilt with

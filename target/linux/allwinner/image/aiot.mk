@@ -1,3 +1,5 @@
+# NPU / GPU / overclock stay out of DEVICE_PACKAGES. They are extra kmods
+# (see target/linux/allwinner/modules.mk and package/kernel/sunxi-overclock).
 define Device/radxa_cubie-a7a
   KERNEL_NAME := Image
   DEVICE_VENDOR := Radxa
