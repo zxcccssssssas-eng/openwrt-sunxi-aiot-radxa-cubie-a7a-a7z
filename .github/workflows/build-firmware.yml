@@ -1,6 +1,9 @@
 # Manual firmware build for Radxa Cubie A7A / A7Z.
 # Trigger from the Actions tab: "Build Firmware" → Run workflow.
 # Restricted to repository admins.
+#
+# OpenClash pulls ruby. Keep CONFIG_RUBY_ENABLE_YJIT unset so the job does
+# not host-compile rustc (that currently fails and is far too heavy for CI).
 
 name: Build Firmware
 
@@ -138,11 +141,24 @@ jobs:
 
           make defconfig
 
+          # defconfig can turn YJIT on (default y on aarch64) after ruby is
+          # pulled in via OpenClash. Force it off so we do not host-compile rustc.
+          if grep -q '^CONFIG_RUBY_ENABLE_YJIT=y' .config; then
+            echo 'Disabling CONFIG_RUBY_ENABLE_YJIT (OpenClash only needs ruby YAML)'
+          fi
+          sed -i '/CONFIG_RUBY_ENABLE_YJIT/d' .config
+          echo '# CONFIG_RUBY_ENABLE_YJIT is not set' >> .config
+          if grep -q '^CONFIG_RUBY_ENABLE_YJIT=y' .config; then
+            echo '::error::failed to disable Ruby YJIT; that would host-compile rustc'
+            exit 1
+          fi
+
           grep -q "^CONFIG_TARGET_allwinner_aiot_DEVICE_${DEVICE}=y" .config
           grep -q '^CONFIG_PACKAGE_luci=y' .config
+          grep -q '^CONFIG_PACKAGE_luci-app-openclash=y' .config
 
           echo "----- enabled target / image packages -----"
-          grep -E '^CONFIG_(TARGET_allwinner|PACKAGE_luci|PACKAGE_wpad|PACKAGE_kmod-aic|PACKAGE_luci-app-openclash)' .config || true
+          grep -E '^CONFIG_(TARGET_allwinner|PACKAGE_luci|PACKAGE_wpad|PACKAGE_kmod-aic|PACKAGE_luci-app-openclash)|RUBY_ENABLE_YJIT' .config || true
 
       - name: Download sources
         working-directory: ${{ env.BUILD_DIR }}
