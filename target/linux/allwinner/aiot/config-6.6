@@ -245,7 +245,9 @@ CONFIG_AW_MMC_V5P3X=y
 # CONFIG_AW_MSGBOX is not set
 # CONFIG_AW_MTD is not set
 # CONFIG_AW_MULTI_CHARGE_POWER is not set
-CONFIG_AW_NNA_GALCORE=m
+# NPU drivers are extra kmods (kmod-aw-nna-galcore / kmod-aw-nna-vip),
+# not part of the default kernel. Package KCONFIG enables them when selected.
+# CONFIG_AW_NNA_GALCORE is not set
 # CONFIG_AW_NNA_VIP is not set
 # CONFIG_AW_NPD is not set
 CONFIG_AW_NSI=y

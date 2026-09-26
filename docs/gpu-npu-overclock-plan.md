@@ -462,14 +462,15 @@ vendor `pvrsrvkm`, as requested.
 
 | Package | menuconfig | Default | Notes |
 | --- | --- | --- | --- |
-| `kmod-aw-nna-galcore` | Allwinner A733 extras | not in image | `/dev/galcore`, ABI 6.4.18.6 |
-| `kmod-aw-nna-vip` | Allwinner A733 extras | not in image | `/dev/vipcore`, conflicts with galcore |
-| `kmod-drm-powervr` | Allwinner A733 extras | not in image | 6.18+ PowerVR + bundled drm_gpuvm, `exp_hw_support=1` |
-| `powervr-firmware` | Firmware | pulled by kmod | `powervr/rogue_36.56.104.183_v1.fw` |
-| `kmod-sunxi-overclock` | Allwinner A733 extras | **n**, no autoload | UCI `/etc/config/overclock`, caps 1120/1008 MHz |
+| `kmod-aw-nna-galcore` | Allwinner A733 extras | extra `.ipk`, not in image | `/dev/galcore`, ABI 6.4.18.6 |
+| `kmod-aw-nna-vip` | Allwinner A733 extras | extra `.ipk`, not in image | `/dev/vipcore`, conflicts with galcore |
+| `kmod-drm-powervr` | Allwinner A733 extras | not built in CI | 6.18+ PowerVR + bundled drm_gpuvm, `exp_hw_support=1` |
+| `powervr-firmware` | Firmware | pulled by GPU kmod | `powervr/rogue_36.56.104.183_v1.fw` |
+| `kmod-sunxi-overclock` | Allwinner A733 extras | extra `.ipk`, not in image | UCI `/etc/config/overclock`, caps 1120/1008 MHz |
 
-GPU DT now matches mainline: `img,img-bxm-4-64` / `img,img-rogue` with
-`clock-names = "core", "mem", "sys"`. NPU dtsi typo `disable` → `disabled`.
+CI `firmware.config` sets NPU/overclock packages to `=m` (build ipk, skip
+squashfs). `aiot/config-6.6` no longer forces `CONFIG_AW_NNA_GALCORE=m`;
+the KernelPackage KCONFIG enables it only when the extra is selected.
 
 Enable with `make menuconfig` (do not add to `DEVICE_PACKAGES` until probe is
 proven on hardware):

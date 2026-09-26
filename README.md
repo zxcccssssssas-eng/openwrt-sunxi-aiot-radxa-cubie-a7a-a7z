@@ -75,6 +75,36 @@ make4.1+ perl python3.7+ rsync subversion unzip which
 - [x] MicroSD
 - [x] USB Ports (realtek wifi dongle works fine)
 
+### Optional extras (not in the default firmware)
+
+NPU, GPU, and overclock are extra kernel packages. The default image is
+still the Cubie AP/router build (LuCI, Wi-Fi, OpenClash). They are **not**
+in `DEVICE_PACKAGES`.
+
+| Package | menuconfig | Default image | Notes |
+| --- | --- | --- | --- |
+| `kmod-aw-nna-vip` | Kernel modules → Allwinner A733 extras | extra `.ipk` only | NPU VIPLite, `/dev/vipcore` |
+| `kmod-aw-nna-galcore` | Kernel modules → Allwinner A733 extras | extra `.ipk` only | NPU galcore, `/dev/galcore` (conflicts with vip) |
+| `kmod-sunxi-overclock` | Kernel modules → Allwinner A733 extras | extra `.ipk` only | GPU/NPU clock helper; UCI `/etc/config/overclock` stays `enabled=0` |
+| `kmod-drm-powervr` | Kernel modules → Allwinner A733 extras | off | PowerVR GPU; enable with menuconfig or CI `extra_packages` |
+
+GitHub Actions **Build Firmware** compiles NPU + overclock as extra `.ipk`
+files under `extras/` in the artifact. They are not installed into the
+squashfs unless you tick **include NPU in image** / **include overclock in
+image**. After flashing the default image:
+
+```
+opkg install /tmp/kmod-aw-nna-vip_*.ipk
+opkg install /tmp/kmod-sunxi-overclock_*.ipk
+# overclock still does nothing until:
+uci set overclock.overclock.enabled=1
+uci commit overclock
+/etc/init.d/sunxi-overclock start
+```
+
+Local build: `make menuconfig` and select the extras, or leave them unset
+for a default router image.
+
 ### Related Repositories
 
 The main repository uses multiple sub-repositories to manage packages of

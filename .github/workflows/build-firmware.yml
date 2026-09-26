@@ -1,6 +1,9 @@
 # Manual firmware build for Radxa Cubie A7A / A7Z.
 # Trigger from the Actions tab: "Build Firmware" → Run workflow.
 # Restricted to repository admins.
+#
+# Default image is the Cubie AP/router build. NPU and overclock are extra
+# software (.ipk). Tick include_*_in_image to bake them into the squashfs.
 
 name: Build Firmware
 
@@ -15,8 +18,18 @@ on:
         options:
           - cubie-a7a
           - cubie-a7z
+      include_npu_in_image:
+        description: Install NPU driver (kmod-aw-nna-vip) into the firmware image. Default is extra .ipk only.
+        required: false
+        type: boolean
+        default: false
+      include_overclock_in_image:
+        description: Install overclock helper (kmod-sunxi-overclock) into the firmware image. Stays UCI-disabled until enabled. Default is extra .ipk only.
+        required: false
+        type: boolean
+        default: false
       extra_packages:
-        description: Extra packages to enable (space-separated CONFIG names without CONFIG_PACKAGE_ prefix)
+        description: Extra packages to install into the image (space-separated names without CONFIG_PACKAGE_ prefix, e.g. kmod-drm-powervr)
         required: false
         type: string
         default: ""
@@ -117,6 +130,8 @@ jobs:
         working-directory: ${{ env.BUILD_DIR }}
         env:
           EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages }}
+          INCLUDE_NPU: ${{ github.event.inputs.include_npu_in_image }}
+          INCLUDE_OVERCLOCK: ${{ github.event.inputs.include_overclock_in_image }}
         run: |
           case "${BOARD}" in
             cubie-a7a) DEVICE="radxa_cubie-a7a" ;;
@@ -130,6 +145,14 @@ jobs:
           cp .github/files/firmware.config .config
           printf 'CONFIG_TARGET_allwinner_aiot_DEVICE_%s=y\n' "${DEVICE}" >> .config
 
+          # Promote extra software from ipk-only (=m) into the squashfs (=y).
+          if [ "${INCLUDE_NPU}" = "true" ]; then
+            printf 'CONFIG_PACKAGE_kmod-aw-nna-vip=y\n' >> .config
+          fi
+          if [ "${INCLUDE_OVERCLOCK}" = "true" ]; then
+            printf 'CONFIG_PACKAGE_kmod-sunxi-overclock=y\n' >> .config
+          fi
+
           if [ -n "${EXTRA_PACKAGES}" ]; then
             for pkg in ${EXTRA_PACKAGES}; do
               printf 'CONFIG_PACKAGE_%s=y\n' "${pkg}" >> .config
@@ -141,8 +164,20 @@ jobs:
           grep -q "^CONFIG_TARGET_allwinner_aiot_DEVICE_${DEVICE}=y" .config
           grep -q '^CONFIG_PACKAGE_luci=y' .config
 
+          if [ "${INCLUDE_NPU}" = "true" ]; then
+            grep -q '^CONFIG_PACKAGE_kmod-aw-nna-vip=y' .config
+          else
+            grep -q '^CONFIG_PACKAGE_kmod-aw-nna-vip=m' .config
+            grep -q '^CONFIG_PACKAGE_kmod-aw-nna-galcore=m' .config
+          fi
+          if [ "${INCLUDE_OVERCLOCK}" = "true" ]; then
+            grep -q '^CONFIG_PACKAGE_kmod-sunxi-overclock=y' .config
+          else
+            grep -q '^CONFIG_PACKAGE_kmod-sunxi-overclock=m' .config
+          fi
+
           echo "----- enabled target / image packages -----"
-          grep -E '^CONFIG_(TARGET_allwinner|PACKAGE_luci|PACKAGE_wpad|PACKAGE_kmod-aic|PACKAGE_luci-app-openclash)' .config || true
+          grep -E '^CONFIG_(TARGET_allwinner|PACKAGE_luci|PACKAGE_wpad|PACKAGE_kmod-aic|PACKAGE_luci-app-openclash|PACKAGE_kmod-aw-nna|PACKAGE_kmod-sunxi-overclock|PACKAGE_kmod-drm-powervr)' .config || true
 
       - name: Download sources
         working-directory: ${{ env.BUILD_DIR }}
@@ -162,8 +197,9 @@ jobs:
         working-directory: ${{ env.BUILD_DIR }}
         run: |
           dest="${GITHUB_WORKSPACE}/firmware"
+          extras="${dest}/extras"
           src="bin/targets/allwinner/aiot"
-          mkdir -p "${dest}"
+          mkdir -p "${dest}" "${extras}"
           shopt -s nullglob
           images=("${src}"/*.img.gz)
           if [ ${#images[@]} -eq 0 ]; then
@@ -175,9 +211,26 @@ jobs:
           for extra in "${src}"/*.manifest "${src}/sha256sums" "${src}/config.buildinfo"; do
             [ -e "${extra}" ] && cp -a "${extra}" "${dest}/"
           done
-          (cd "${dest}" && sha256sum -- * > SHA256SUMS)
+
+          # Extra software ipks (NPU / overclock). Not in the default squashfs.
+          while IFS= read -r -d '' ipk; do
+            cp -a "${ipk}" "${extras}/"
+          done < <(find bin/targets bin/packages -type f \( \
+            -name 'kmod-aw-nna-*.ipk' -o \
+            -name 'kmod-sunxi-overclock*.ipk' \
+          \) -print0 2>/dev/null || true)
+
+          if [ -z "$(ls -A "${extras}" 2>/dev/null)" ]; then
+            echo "::warning::No extra NPU/overclock ipks found"
+            rmdir "${extras}" || true
+          else
+            echo "Extra software packages:"
+            ls -lh "${extras}"
+          fi
+
+          (cd "${dest}" && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
           echo "Files to upload:"
-          ls -lh "${dest}"
+          find "${dest}" -type f -ls
           echo "artifact=openwrt-${BOARD}-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload firmware
