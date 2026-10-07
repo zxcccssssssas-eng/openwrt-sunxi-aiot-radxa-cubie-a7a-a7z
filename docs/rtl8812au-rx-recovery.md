@@ -106,3 +106,38 @@ mac80211 package release/ABI changes together.
 
 A multi-day hardware soak is still necessary to confirm that the reported
 long-uptime issue is resolved.
+
+## Recurrence and unsuccessful follow-up (2026-10-08)
+
+The real-device issue recurred with the patched USB module loaded. The
+retained log captured AP deauthentication with reason 34
+(`DISASSOC_LOW_ACK`), followed by repeated authentication timeouts.
+Fresh scan results were still arriving, so the RX-request retry patch
+has not been shown to resolve this failure. The 5 GHz AP was observed
+at approximately -78 to -88 dBm; the host computer was connected to the
+same AP at approximately -56 dBm. The user requested 5 GHz only and
+could not move the adapter during testing.
+
+Radio restart, USB rebind, complete Realtek module reload, and the
+Allwinner USB port power controls did not establish reliable traffic.
+A temporary vendor-driver trial hit a cfg80211 netdev-removal deadlock,
+requiring a storage-sync/remount and router restart. The vendor module
+was loaded from `/tmp` and was never installed persistently. A revised
+trial using cfg80211 register/unregister helpers avoided that deadlock,
+but did not establish reliable WPA authentication, including with VHT
+disabled and 20 MHz bandwidth. It was unloaded, and the original patched
+rtw88 driver was restored.
+
+The nearby AIC8800 AP was received at -22 to -30 dBm. Pausing it allowed
+reconnection and DHCP, but a controlled gateway test still lost 2 of 10
+packets. Moving the local AP to channel 149 and requesting lower transmit
+power did not produce a reliable link. Its original channel and power
+settings were restored. SSIDs, credentials, the stable station name,
+and the 5 GHz-only uplink were preserved.
+
+There is no verified fix for the reported real-device failure yet. A
+stronger-signal/antenna test is needed to separate RF conditions from a
+remaining driver problem. The PR should remain a draft: compilation and
+RX fault-injection results validate the specific code path, not a
+long-uptime operational fix. Failure logs and configuration snapshots
+are retained in protected `/root/rtl8812au-*20261008*` paths on the router.
