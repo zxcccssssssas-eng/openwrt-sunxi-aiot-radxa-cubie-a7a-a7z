@@ -70,8 +70,39 @@ allocation failure, submission failure, terminal completion errors, buffer
 ownership, and suppression of retries/submissions after shutdown. The
 shims do not test kernel concurrency or USB hardware behavior.
 
-The new module has not been installed on the router. Serial rebind recovery
-was tested with the original module; a multi-day hardware soak of the
-patched build remains necessary to confirm the reported long-uptime issue
-is resolved. Install a matching complete wireless package set or rebuild
-firmware, because the mac80211 package release/ABI changes together.
+## Live hotfix (2026-10-07)
+
+At the user's request, the patched `rtw88_usb.ko` was transferred over the
+115200-baud USB serial console in a compressed archive. Both the archive
+and extracted module passed SHA-256 verification on the router before
+installation. The running kernel's module version matched the build, and
+the packaged `rtw88_core`, `rtw88_88xxa`, `rtw88_8812a`, and `rtw88_8812au`
+modules were byte-for-byte identical to the router's copies. This allowed
+replacing only the USB transport module while preserving the running
+wireless stack and AIC8800 AP.
+
+The original module, configuration copies, module parameter, and a rollback
+script are saved in a protected `/root/rtl8812au-hotfix-*` directory on the
+router. The installed replacement is `/lib/modules/6.6.104/rtw88_usb.ko`:
+
+```text
+Original SHA-256: baa0fce30eb92b11eb50ac5c0687c6008289aa1ad2d43ef6ab6b99970538d1e7
+Patched SHA-256:  d10bf213ae542d0f95e6e45de0f2f9f6fc8da5e40750fb5b6055c97e78db0d1a
+```
+
+The original USB transport and adapter modules were unloaded, the patched
+transport was loaded, and the adapter module was reloaded. Association,
+authentication, DHCP, and bidirectional packet traffic recovered on the
+new station interface. DHCP was rebound at runtime; persistent UCI
+configuration was preserved.
+Ten gateway pings and ten public-network pings each returned ten replies
+with zero packet loss using the patched adapter.
+
+This manual replacement survives reboot. The package database remains at
+release r2 because this is a targeted module hotfix; a package reinstall or
+firmware upgrade can overwrite it. For a packaged upgrade, install the
+matching complete wireless package set or rebuild firmware, because the
+mac80211 package release/ABI changes together.
+
+A multi-day hardware soak is still necessary to confirm that the reported
+long-uptime issue is resolved.
