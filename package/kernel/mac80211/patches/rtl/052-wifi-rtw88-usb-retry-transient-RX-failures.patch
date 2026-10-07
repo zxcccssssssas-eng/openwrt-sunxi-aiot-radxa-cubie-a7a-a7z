@@ -1,0 +1,241 @@
+From: zxcccssssssas-eng <zxcccssssssas-eng@users.noreply.github.com>
+Subject: [PATCH] wifi: rtw88: usb: keep RX requests alive after transient failures
+
+Temporary USB completion errors and atomic RX buffer allocation failures
+silently retire one of the four RX URBs. Repeated failures eventually
+stop reception completely, even though the radio remains up. Retry these
+requests with a short delay and use GFP_KERNEL in the retry worker.
+
+Serialize retry scheduling with shutdown, cancel workers before killing
+URBs, and drain RX work before purging its queue. Do not retry cancelled,
+disconnected, or halted endpoints.
+
+Signed-off-by: zxcccssssssas-eng <zxcccssssssas-eng@users.noreply.github.com>
+
+diff --git a/drivers/net/wireless/realtek/rtw88/usb.c b/drivers/net/wireless/realtek/rtw88/usb.c
+--- a/drivers/net/wireless/realtek/rtw88/usb.c
++++ b/drivers/net/wireless/realtek/rtw88/usb.c
+@@ -663,27 +663,60 @@
+ 
+ static void rtw_usb_read_port_complete(struct urb *urb);
+ 
+-static void rtw_usb_rx_resubmit(struct rtw_usb *rtwusb, struct rx_usb_ctrl_block *rxcb)
++static void rtw_usb_rx_retry(struct rtw_usb *rtwusb,
++			     struct rx_usb_ctrl_block *rxcb)
++{
++	unsigned long flags;
++
++	/* Serialize retry scheduling against disconnect. */
++	spin_lock_irqsave(&rtwusb->rx_lock, flags);
++	if (!rtwusb->rx_stopped)
++		queue_delayed_work(rtwusb->rxwq, &rxcb->retry_work,
++				   msecs_to_jiffies(20));
++	spin_unlock_irqrestore(&rtwusb->rx_lock, flags);
++}
++
++static void rtw_usb_rx_resubmit(struct rtw_usb *rtwusb,
++				struct rx_usb_ctrl_block *rxcb, gfp_t gfp)
+ {
+ 	struct rtw_dev *rtwdev = rtwusb->rtwdev;
+ 	int error;
+ 
+-	rxcb->rx_skb = alloc_skb(RTW_USB_MAX_RECVBUF_SZ, GFP_ATOMIC);
+-	if (!rxcb->rx_skb)
++	if (READ_ONCE(rtwusb->rx_stopped))
+ 		return;
++
++	rxcb->rx_skb = alloc_skb(RTW_USB_MAX_RECVBUF_SZ, gfp);
++	if (!rxcb->rx_skb) {
++		rtw_usb_rx_retry(rtwusb, rxcb);
++		return;
++	}
+ 
+ 	usb_fill_bulk_urb(rxcb->rx_urb, rtwusb->udev,
+ 			  usb_rcvbulkpipe(rtwusb->udev, rtwusb->pipe_in),
+ 			  rxcb->rx_skb->data, RTW_USB_MAX_RECVBUF_SZ,
+ 			  rtw_usb_read_port_complete, rxcb);
+ 
+-	error = usb_submit_urb(rxcb->rx_urb, GFP_ATOMIC);
++	error = usb_submit_urb(rxcb->rx_urb, gfp);
+ 	if (error) {
+ 		kfree_skb(rxcb->rx_skb);
+-		if (error != -ENODEV)
+-			rtw_err(rtwdev, "Err sending rx data urb %d\n",
+-				error);
+-	}
++		rxcb->rx_skb = NULL;
++		if (error == -ENOMEM || error == -EAGAIN)
++			rtw_usb_rx_retry(rtwusb, rxcb);
++		else if (error != -ENODEV && error != -EPERM &&
++			 error != -ENOENT && error != -ESHUTDOWN)
++			dev_err_ratelimited(rtwdev->dev,
++					    "Err sending rx data urb %d\n", error);
++	}
++}
++
++static void rtw_usb_rx_retry_work(struct work_struct *work)
++{
++	struct rx_usb_ctrl_block *rxcb =
++		container_of(to_delayed_work(work), struct rx_usb_ctrl_block,
++			     retry_work);
++	struct rtw_usb *rtwusb = rtw_get_usb_priv(rxcb->rtwdev);
++
++	rtw_usb_rx_resubmit(rtwusb, rxcb, GFP_KERNEL);
+ }
+ 
+ static void rtw_usb_read_port_complete(struct urb *urb)
+@@ -693,51 +726,62 @@
+ 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
+ 	struct sk_buff *skb = rxcb->rx_skb;
+ 
++	rxcb->rx_skb = NULL;
+ 	if (urb->status == 0) {
+ 		if (urb->actual_length >= RTW_USB_MAX_RECVBUF_SZ ||
+ 		    urb->actual_length < 24) {
+ 			rtw_err(rtwdev, "failed to get urb length:%d\n",
+ 				urb->actual_length);
+-			if (skb)
+-				dev_kfree_skb_any(skb);
++			dev_kfree_skb_any(skb);
+ 		} else {
+ 			skb_put(skb, urb->actual_length);
+ 			skb_queue_tail(&rtwusb->rx_queue, skb);
+ 			queue_work(rtwusb->rxwq, &rtwusb->rx_work);
+ 		}
+-		rtw_usb_rx_resubmit(rtwusb, rxcb);
+-	} else {
+-		switch (urb->status) {
+-		case -EINVAL:
+-		case -EPIPE:
+-		case -ENODEV:
+-		case -ESHUTDOWN:
+-		case -ENOENT:
+-		case -EPROTO:
+-		case -EILSEQ:
+-		case -ETIME:
+-		case -ECOMM:
+-		case -EOVERFLOW:
+-		case -EINPROGRESS:
+-			break;
+-		default:
+-			rtw_err(rtwdev, "status %d\n", urb->status);
+-			break;
+-		}
+-		if (skb)
+-			dev_kfree_skb_any(skb);
++		rtw_usb_rx_resubmit(rtwusb, rxcb, GFP_ATOMIC);
++		return;
++	}
++
++	dev_kfree_skb_any(skb);
++	switch (urb->status) {
++	case -EPROTO:
++	case -EILSEQ:
++	case -ETIME:
++	case -ETIMEDOUT:
++	case -ECOMM:
++	case -EOVERFLOW:
++		/* A temporary bus error must not permanently drain the RX URBs. */
++		rtw_usb_rx_retry(rtwusb, rxcb);
++		break;
++	case -EINVAL:
++	case -EPIPE:
++	case -ENODEV:
++	case -ESHUTDOWN:
++	case -ENOENT:
++	case -ECONNRESET:
++	case -EINPROGRESS:
++		break;
++	default:
++		dev_err_ratelimited(rtwdev->dev, "RX urb status %d\n", urb->status);
++		break;
+ 	}
+ }
+ 
+ static void rtw_usb_cancel_rx_bufs(struct rtw_usb *rtwusb)
+ {
+-	struct rx_usb_ctrl_block *rxcb;
++	unsigned long flags;
+ 	int i;
+ 
+-	for (i = 0; i < RTW_USB_RXCB_NUM; i++) {
+-		rxcb = &rtwusb->rx_cb[i];
+-		usb_kill_urb(rxcb->rx_urb);
+-	}
++	spin_lock_irqsave(&rtwusb->rx_lock, flags);
++	rtwusb->rx_stopped = true;
++	spin_unlock_irqrestore(&rtwusb->rx_lock, flags);
++
++	/* Stop workers before killing URBs: a worker may be submitting one. */
++	for (i = 0; i < RTW_USB_RXCB_NUM; i++)
++		cancel_delayed_work_sync(&rtwusb->rx_cb[i].retry_work);
++
++	for (i = 0; i < RTW_USB_RXCB_NUM; i++)
++		usb_kill_urb(rtwusb->rx_cb[i].rx_urb);
+ }
+ 
+ static void rtw_usb_free_rx_bufs(struct rtw_usb *rtwusb)
+@@ -916,6 +960,7 @@
+ static int rtw_usb_init_rx(struct rtw_dev *rtwdev)
+ {
+ 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
++	int i;
+ 
+ 	rtwusb->rxwq = create_singlethread_workqueue("rtw88_usb: rx wq");
+ 	if (!rtwusb->rxwq) {
+@@ -923,7 +968,12 @@
+ 		return -ENOMEM;
+ 	}
+ 
++	spin_lock_init(&rtwusb->rx_lock);
++	rtwusb->rx_stopped = false;
+ 	skb_queue_head_init(&rtwusb->rx_queue);
++	for (i = 0; i < RTW_USB_RXCB_NUM; i++)
++		INIT_DELAYED_WORK(&rtwusb->rx_cb[i].retry_work,
++				  rtw_usb_rx_retry_work);
+ 
+ 	INIT_WORK(&rtwusb->rx_work, rtw_usb_rx_handler);
+ 
+@@ -938,7 +988,7 @@
+ 	for (i = 0; i < RTW_USB_RXCB_NUM; i++) {
+ 		struct rx_usb_ctrl_block *rxcb = &rtwusb->rx_cb[i];
+ 
+-		rtw_usb_rx_resubmit(rtwusb, rxcb);
++		rtw_usb_rx_resubmit(rtwusb, rxcb, GFP_KERNEL);
+ 	}
+ }
+ 
+@@ -946,10 +996,10 @@
+ {
+ 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
+ 
+-	skb_queue_purge(&rtwusb->rx_queue);
+-
++	rtw_usb_cancel_rx_bufs(rtwusb);
+ 	flush_workqueue(rtwusb->rxwq);
+ 	destroy_workqueue(rtwusb->rxwq);
++	skb_queue_purge(&rtwusb->rx_queue);
+ }
+ 
+ static int rtw_usb_init_tx(struct rtw_dev *rtwdev)
+diff --git a/drivers/net/wireless/realtek/rtw88/usb.h b/drivers/net/wireless/realtek/rtw88/usb.h
+--- a/drivers/net/wireless/realtek/rtw88/usb.h
++++ b/drivers/net/wireless/realtek/rtw88/usb.h
+@@ -53,6 +53,7 @@
+ struct rx_usb_ctrl_block {
+ 	struct rtw_dev *rtwdev;
+ 	struct urb *rx_urb;
++	struct delayed_work retry_work;
+ 	struct sk_buff *rx_skb;
+ };
+ 
+@@ -79,6 +80,9 @@
+ 	struct sk_buff_head tx_queue[RTW_USB_EP_MAX];
+ 	struct work_struct tx_work;
+ 
++	/* protects rx_stopped and retry scheduling */
++	spinlock_t rx_lock;
++	bool rx_stopped;
+ 	struct rx_usb_ctrl_block rx_cb[RTW_USB_RXCB_NUM];
+ 	struct sk_buff_head rx_queue;
+ 	struct work_struct rx_work;
